@@ -1,0 +1,154 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  body { margin:0; background:#111; font-family: sans-serif; color:#fff; text-align:center; }
+  canvas { background:#6ec6ff; max-width:100%; border:3px solid #333; border-radius:6px; touch-action:none; }
+  #pad { display:flex; justify-content:space-between; padding:6px 12px; }
+  #pad button { font-size:22px; width:64px; height:48px; border-radius:10px; border:none; background:#333; color:#fff; user-select:none; }
+  #hint { font-size:13px; color:#aaa; margin:4px 0; }
+</style>
+</head>
+<body>
+<canvas id="c" width="800" height="400" tabindex="0"></canvas>
+<div id="pad">
+  <div><button id="bl">◀</button> <button id="br">▶</button></div>
+  <div><button id="bj">⤒</button></div>
+</div>
+<div id="hint">Nhấp vào game rồi dùng ← → (hoặc A/D) để di chuyển, Space/↑/W để nhảy, Shift để chạy nhanh. R để chơi lại.</div>
+
+<script>
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+const W = 800, H = 400, LEVEL_W = 3300, GROUND_Y = 340;
+
+// ---------- Level ----------
+const solids = [
+  {x:0,y:GROUND_Y,w:900,h:60}, {x:1000,y:GROUND_Y,w:700,h:60},
+  {x:1850,y:GROUND_Y,w:750,h:60}, {x:2700,y:GROUND_Y,w:600,h:60},
+  {x:300,y:260,w:120,h:20}, {x:520,y:200,w:100,h:20},
+  {x:1100,y:250,w:150,h:20}, {x:1350,y:190,w:120,h:20},
+  {x:1950,y:260,w:140,h:20}, {x:2200,y:200,w:120,h:20}, {x:2450,y:260,w:100,h:20},
+];
+const coinsInit = [
+  [340,225],[370,225],[550,165],[1130,215],[1170,215],[1380,155],[1420,155],
+  [700,300],[1500,300],[1990,225],[2240,165],[2480,225],[2900,300],[2950,300],[3000,300]
+];
+const enemiesInit = [
+  {x:600,y:GROUND_Y-22,min:450,max:850},
+  {x:1200,y:GROUND_Y-22,min:1050,max:1650},
+  {x:1950,y:GROUND_Y-22,min:1870,max:2300},
+  {x:2400,y:GROUND_Y-22,min:2300,max:2580},
+  {x:2850,y:GROUND_Y-22,min:2720,max:3150},
+];
+const goal = {x:3220, y:GROUND_Y-140, w:10, h:140};
+
+// ---------- State ----------
+let keys = {}, state, coins, enemies, player, cam, score, lives, msg;
+function reset(full=true){
+  if(full){ score=0; lives=3; coins=coinsInit.map(c=>({x:c[0],y:c[1],got:false}));
+    enemies=enemiesInit.map(e=>({...e,w:26,h:22,dir:1,alive:true})); state='play'; msg=''; }
+  player={x:60,y:200,w:24,h:32,vx:0,vy:0,ground:false,face:1,t:0};
+  cam=0;
+}
+reset(true);
+
+addEventListener('keydown',e=>{ keys[e.code]=true;
+  if(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Space'].includes(e.code)) e.preventDefault();
+  if(e.code==='KeyR') reset(true); });
+addEventListener('keyup',e=>{ keys[e.code]=false; });
+cv.addEventListener('click',()=>cv.focus());
+
+// touch buttons
+function bind(id,code){ const b=document.getElementById(id);
+  const on=e=>{keys[code]=true;e.preventDefault()}, off=e=>{keys[code]=false;e.preventDefault()};
+  b.addEventListener('touchstart',on); b.addEventListener('touchend',off);
+  b.addEventListener('mousedown',on); b.addEventListener('mouseup',off); b.addEventListener('mouseleave',off); }
+bind('bl','ArrowLeft'); bind('br','ArrowRight'); bind('bj','Space');
+
+const hit=(a,b)=>a.x<b.x+b.w&&a.x+a.w>b.x&&a.y<b.y+b.h&&a.y+a.h>b.y;
+
+function die(){
+  lives--;
+  if(lives<=0){ state='over'; msg='GAME OVER - nhấn R để chơi lại'; }
+  else reset(false);
+}
+
+// ---------- Update ----------
+function update(){
+  if(state!=='play') return;
+  const p=player, run=keys['ShiftLeft']||keys['ShiftRight'];
+  const sp=run?4.6:3.2;
+  const left=keys['ArrowLeft']||keys['KeyA'], right=keys['ArrowRight']||keys['KeyD'];
+  const jump=keys['Space']||keys['ArrowUp']||keys['KeyW'];
+  if(left){p.vx=-sp;p.face=-1} else if(right){p.vx=sp;p.face=1} else p.vx*=0.7;
+  if(jump&&p.ground){p.vy=-10.5;p.ground=false}
+  if(!jump&&p.vy<-3) p.vy=-3;           // nhảy ngắn khi thả phím
+  p.vy=Math.min(p.vy+0.5,12);
+
+  p.x+=p.vx;
+  for(const s of solids) if(hit(p,s)){ if(p.vx>0)p.x=s.x-p.w; else if(p.vx<0)p.x=s.x+s.w; }
+  p.x=Math.max(0,Math.min(LEVEL_W-p.w,p.x));
+  const prevBottom=p.y+p.h;
+  p.y+=p.vy; p.ground=false;
+  for(const s of solids) if(hit(p,s)){
+    if(p.vy>0){p.y=s.y-p.h;p.ground=true} else if(p.vy<0){p.y=s.y+s.h}
+    p.vy=0; }
+  p.t+=Math.abs(p.vx)*0.1;
+
+  for(const c of coins) if(!c.got && Math.hypot(p.x+p.w/2-c.x,p.y+p.h/2-c.y)<20){c.got=true;score+=10}
+  for(const e of enemies){ if(!e.alive) continue;
+    e.x+=e.dir*1.1; if(e.x<e.min){e.x=e.min;e.dir=1} if(e.x+e.w>e.max){e.x=e.max-e.w;e.dir=-1}
+    if(hit(p,e)){
+      if(p.vy>0 && prevBottom<=e.y+10){ e.alive=false; p.vy=-8; score+=100; }
+      else { die(); return; } } }
+  if(p.y>H+80){ die(); return; }
+  if(hit(p,goal)){ state='win'; score+=500; msg='CHIẾN THẮNG! Điểm: '+score+' - nhấn R để chơi lại'; }
+  cam=Math.max(0,Math.min(LEVEL_W-W,p.x-300));
+}
+
+// ---------- Draw ----------
+function draw(){
+  ctx.clearRect(0,0,W,H);
+  // clouds (parallax)
+  ctx.fillStyle='rgba(255,255,255,.8)';
+  for(let i=0;i<8;i++){ const x=((i*450-cam*0.4)%(W+300)+W+300)%(W+300)-100;
+    ctx.beginPath();ctx.arc(x,70+(i%3)*30,22,0,7);ctx.arc(x+25,65+(i%3)*30,28,0,7);ctx.arc(x+55,72+(i%3)*30,20,0,7);ctx.fill(); }
+  ctx.save(); ctx.translate(-cam,0);
+  for(const s of solids){
+    ctx.fillStyle='#8b5a2b'; ctx.fillRect(s.x,s.y,s.w,s.h);
+    ctx.fillStyle='#3fae49'; ctx.fillRect(s.x,s.y,s.w,8);
+  }
+  for(const c of coins) if(!c.got){ ctx.fillStyle='#ffd23f'; ctx.beginPath(); ctx.arc(c.x,c.y,8,0,7); ctx.fill();
+    ctx.strokeStyle='#c99700'; ctx.lineWidth=2; ctx.stroke(); }
+  for(const e of enemies) if(e.alive){ // slime xanh tím
+    ctx.fillStyle='#7b3fe4'; ctx.beginPath(); ctx.ellipse(e.x+13,e.y+14,13,11,0,Math.PI,0); ctx.fillRect(e.x,e.y+13,26,9); ctx.fill();
+    ctx.fillStyle='#fff'; ctx.fillRect(e.x+6,e.y+8,5,6); ctx.fillRect(e.x+16,e.y+8,5,6);
+    ctx.fillStyle='#000'; ctx.fillRect(e.x+8,e.y+10,2,3); ctx.fillRect(e.x+18,e.y+10,2,3); }
+  // cờ đích
+  ctx.fillStyle='#ddd'; ctx.fillRect(goal.x,goal.y,goal.w,goal.h);
+  ctx.fillStyle='#ff4d6d'; ctx.beginPath(); ctx.moveTo(goal.x+goal.w,goal.y); ctx.lineTo(goal.x+60,goal.y+20); ctx.lineTo(goal.x+goal.w,goal.y+40); ctx.fill();
+  // nhân vật: chú mèo ninja áo xanh
+  const p=player; ctx.save(); ctx.translate(p.x+p.w/2,p.y); ctx.scale(p.face,1);
+  ctx.fillStyle='#2f6fed'; ctx.fillRect(-12,12,24,16);                 // thân
+  ctx.fillStyle='#ffcf9e'; ctx.fillRect(-11,0,22,14);                  // đầu
+  ctx.fillStyle='#2f6fed'; ctx.beginPath(); ctx.moveTo(-11,2);ctx.lineTo(-8,-6);ctx.lineTo(-3,2);ctx.moveTo(3,2);ctx.lineTo(8,-6);ctx.lineTo(11,2);ctx.fill(); // tai
+  ctx.fillStyle='#000'; ctx.fillRect(3,5,3,4);
+  const sw=Math.sin(p.t)*(p.ground?4:0);
+  ctx.fillStyle='#1b3f9a'; ctx.fillRect(-9+sw,28,8,4); ctx.fillRect(1-sw,28,8,4);
+  ctx.restore(); ctx.restore();
+  // HUD
+  ctx.fillStyle='#000'; ctx.font='bold 18px sans-serif'; ctx.textAlign='left';
+  ctx.fillText('Điểm: '+score+'   Mạng: '+'♥'.repeat(Math.max(lives,0)),12,26);
+  if(state!=='play'){ ctx.fillStyle='rgba(0,0,0,.6)'; ctx.fillRect(0,150,W,90);
+    ctx.fillStyle='#fff'; ctx.font='bold 24px sans-serif'; ctx.textAlign='center'; ctx.fillText(msg,W/2,205); }
+}
+
+// fixed 60fps
+let last=performance.now(), acc=0;
+function loop(t){ acc+=t-last; last=t; while(acc>=16.67){update();acc-=16.67} draw(); requestAnimationFrame(loop); }
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
